@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  app_cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    container_name: convlstm_cpu_app
+    volumes:
+      - ./data:/app/data # Input MDV data
+      - ./model:/app/model # Model .pth file
+      - ./logs:/app/logs # Persist logs
+      - ./backend/output:/app/backend/output # Output images/json
+      - ./rclone.conf:/root/.config/rclone/rclone.conf # Rclone Auth
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Keys for Push Notifications
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}
+      - VAPID_CLAIM_EMAIL=${VAPID_CLAIM_EMAIL}
+      - SECRET_KEY=${SECRET_KEY}
+      - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+      - FRONTEND_URL=${FRONTEND_URL}
+      - RCLONE_REMOTE_BASE=${RCLONE_REMOTE_BASE} # e.g. gdrive:RadarMendoza/cart_no_clutter
+      # Cada cuántos segundos el watcher consulta Drive. El radar entrega un scan cada 3-4 min;
+      # consultar más seguido solo gasta cuota de la API (rateLimitExceeded).
+      - WATCHER_INTERVAL=${WATCHER_INTERVAL:-20}
+      - INGEST_SECRET_KEY=${INGEST_SECRET_KEY} # Shared key for TITAN telemetry streamer
+      # Supervisión / watchdog (ver deploy/)
+      - STATUS_MAX_AGE_SECONDS=${STATUS_MAX_AGE_SECONDS:-900}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - TELEGRAM_BOT_USERNAME=${TELEGRAM_BOT_USERNAME:-}
+      # Rayos GLM (GOES-19, NOAA Open Data): ver backend/services/lightning.py
+      - GLM_ENABLED=${GLM_ENABLED:-1}
+      - GLM_BBOX=${GLM_BBOX:--37.5,-30.5,-71.0,-65.5}
+      - GLM_KEEP_MINUTES=${GLM_KEEP_MINUTES:-60}
+      - GLM_POLL_SECONDS=${GLM_POLL_SECONDS:-30}
+      # Radares que atiende el worker (el primero es el primario). Ej: sur,norte
+      - RADARS=${RADARS:-sur}
+      # Filtro de ecos fijos: solo cuenta la reflectividad por encima de esta altura (km)
+      - ALERT_MIN_LEVEL_KM=${ALERT_MIN_LEVEL_KM:-5}
+      # Altura por radar (opcional): pisa el default de RADAR_DEFINITIONS (norte 6,5 km por la cordillera)
+      - ALERT_MIN_LEVEL_KM_NORTE=${ALERT_MIN_LEVEL_KM_NORTE:-}
+      - CELL_DBZ_THRESHOLD=${CELL_DBZ_THRESHOLD:-45}
+      # Alertas privadas a parques solares (ver backend/services/solar_parks.py)
+      - SOLAR_PARKS_FILE=${SOLAR_PARKS_FILE:-/app/data/solar_parks.json}
+      - SOLAR_PARK_ALERT_KM=${SOLAR_PARK_ALERT_KM:-20}
+      - SOLAR_PARK_CLEAR_KM=${SOLAR_PARK_CLEAR_KM:-25}
+      - SOLAR_PARK_REPEAT_MINUTES=${SOLAR_PARK_REPEAT_MINUTES:-30}
+      - SOLAR_PARK_HAIL_DBZ=${SOLAR_PARK_HAIL_DBZ:-51}
+      - ENABLE_LOCAL_FRONTEND=${ENABLE_LOCAL_FRONTEND:-0}
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
+      # Retención de archivos (ver backend/scripts/cleanup.py). Los NC pesan ~44 MB.
+      - CLEANUP_INTERVAL_MINUTES=${CLEANUP_INTERVAL_MINUTES:-60}
+      - RETENTION_ARCHIVE_SCANS_HOURS=${RETENTION_ARCHIVE_SCANS_HOURS:-6}
+      - RETENTION_OUTPUT_PREDICTIONS_HOURS=${RETENTION_OUTPUT_PREDICTIONS_HOURS:-12}
+      - MIN_FREE_GB=${MIN_FREE_GB:-8}
+      - TARGET_FREE_GB=${TARGET_FREE_GB:-12}
+      - DISK_ALERT_PCT=${DISK_ALERT_PCT:-85}
+    ports:
+      # BIND_ADDRESS=127.0.0.1 en el .env deja los puertos accesibles solo desde el
+      # propio VPS (cloudflared corre dentro del contenedor y no se ve afectado).
+      # Docker saltea ufw, así que este bind es la forma correcta de cerrarlos.
+      # Default 0.0.0.0 para no romper clientes que aún usen la IP directa.
+      - "${BIND_ADDRESS:-0.0.0.0}:3000:3000" # Frontend
+      - "${BIND_ADDRESS:-0.0.0.0}:8000:8000" # Backend API
+    restart: unless-stopped
+    stop_grace_period: 45s # que el worker termine el ciclo en curso antes del SIGKILL
+    # Límites: el VPS (4 CPU / 7.8 GB) aloja otros servicios. Si el worker se
+    # descontrola, el OOM-killer actúa dentro del contenedor y supervisord lo
+    # relanza, en vez de dejar al host sin memoria (cuelgue del 2026-09-23).
+    mem_limit: ${CONTAINER_MEM_LIMIT:-4g}
+    cpus: ${CONTAINER_CPUS:-3.0}

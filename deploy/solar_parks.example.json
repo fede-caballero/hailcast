@@ -1,0 +1,14 @@
+[
+  {
+    "id": "parque-ejemplo-1",
+    "name": "Parque Solar Ejemplo 1",
+    "lat": -34.6,
+    "lon": -68.35
+  },
+  {
+    "id": "parque-ejemplo-2",
+    "name": "Parque Solar Ejemplo 2",
+    "lat": -33.1,
+    "lon": -68.5
+  }
+]

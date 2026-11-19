@@ -1,0 +1,27 @@
+[Unit]
+Description=Radar Bridge (HailCast): sube los MDV de TITAN al VPS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=titan5
+# Cambiar las rutas si el script o los datos están en otro lado
+ExecStart=/usr/bin/python3 /home/titan5/projDir/scripts/radar_bridge.py \
+    --folder /home/titan5/projDir/data/mdv/radar/cart_no_clutter \
+    --api https://vps-api.hail-cast-mendoza.com \
+    --radar sur
+
+Restart=always
+RestartSec=10s
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+# Misma clave que INGEST_SECRET_KEY en el .env del VPS (la misma que usa telemetry_streamer.service)
+Environment=INGEST_SECRET_KEY=PONER_LA_CLAVE_AQUI
+
+StandardOutput=append:/home/titan5/projDir/logs/radar_bridge.log
+StandardError=append:/home/titan5/projDir/logs/radar_bridge.log
+
+[Install]
+WantedBy=multi-user.target

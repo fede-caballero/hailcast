@@ -1,0 +1,29 @@
+# --- PyTorch con dependencias de CUDA 12.1 ---
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+
+# --- Otras dependencias del proyecto ---
+numpy
+xarray
+netCDF4
+pyproj
+Flask
+Flask-Cors
+Flask-Limiter
+gunicorn
+
+gdown
+pyart-mch
+matplotlib
+Pillow  # validación de imágenes de reportes (ya viene con matplotlib, explícito)
+cartopy
+PyJWT
+google-auth
+requests
+
+# Push Notifications
+pywebpush
+python-dotenv
+py-vapid

@@ -1,0 +1,31 @@
+{
+    "name": "HailCast · Radar y alertas de granizo en Mendoza",
+    "short_name": "HailCast",
+    "description": "Radar meteorológico en vivo, pronóstico a 30 minutos con IA y alertas gratuitas de granizo para el sur de Mendoza.",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#0f172a",
+    "theme_color": "#0f172a",
+    "orientation": "portrait",
+    "icons": [
+        {
+            "src": "/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ],
+    "gcm_sender_id": "103953800507"
+}

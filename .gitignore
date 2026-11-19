@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secretos y config local
+.env
+.env.*
+!.env.example
+*.pem
+rclone.conf
+backend/instance_connection/
+
+# Datos, modelos, salidas
+data/
+backend/data/
+backend/output/
+*.db
+*.sqlite3
+*.nc
+*.mdv
+*.pth
+*.deb
+training/trained_models/
+logs/
+*.log
+deploy/solar_parks.json
+
+# JS
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/tsconfig.tsbuildinfo
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store

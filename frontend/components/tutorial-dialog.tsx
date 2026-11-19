@@ -1,0 +1,244 @@
+import { useState, useEffect } from "react"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Bot, LocateFixed, AlertCircle, Zap, Bell, BellRing, Play, Layers, Cloud, Info, Mail, Github, Linkedin, RadioTower } from "lucide-react"
+import { useLanguage } from "@/lib/language-context"
+
+interface TutorialDialogProps {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    initialTab?: 'features' | 'radar' | 'contact'
+}
+
+export function TutorialDialog({ open, onOpenChange, initialTab = 'features' }: TutorialDialogProps) {
+    const { t } = useLanguage()
+    const [tab, setTab] = useState<string>(initialTab)
+    useEffect(() => { if (open) setTab(initialTab) }, [open, initialTab])
+    const steps = [
+        {
+            icon: <Bot className="h-6 w-6 text-blue-400" />,
+            title: t("Inteligencia Artificial", "Artificial Intelligence"),
+            description: t("Nuestra app utiliza un modelo de IA avanzado para escanear imágenes de radar y predecir el movimiento de tormentas a corto plazo.", "Our app uses an advanced AI model to scan radar images and predict short-term storm movement.")
+        },
+        {
+            icon: <RadioTower className="h-6 w-6 text-amber-400" />,
+            title: t("Dos Radares", "Two Radars"),
+            description: t("HailCast muestra el radar Sur (San Rafael) y el radar Norte (San Martín). Con el botón de la antena, en la columna derecha del mapa, cambiás de uno a otro: la letra indica cuál estás viendo y el mapa se centra en ese radar.", "HailCast shows the South radar (San Rafael) and the North radar (San Martín). Use the antenna button on the right side of the map to switch between them: the letter shows which one you are viewing and the map recenters on that radar.")
+        },
+        {
+            icon: <div className="flex items-center justify-center h-8 w-8 rounded-full bg-green-400 text-black shadow-md shadow-green-500/30"><Play className="h-4 w-4 ml-0.5" /></div>,
+            title: t("Control del Tiempo", "Time Control"),
+            description: t("Dale 'Play' al reproductor inferior para ver la animación: primero verás los datos observados (pasado) y luego la predicción (futuro).", "Hit 'Play' on the bottom player to see the animation: first you'll see observed data (past) followed by the prediction (future).")
+        },
+        {
+            icon: <LocateFixed className="h-6 w-6 text-green-400" />,
+            title: t("Tu Ubicación", "Your Location"),
+            description: t("Al activar tu GPS, el sistema puede localizarte en el mapa y calcular distancias exactas a las celdas de tormenta cercanas.", "By enabling GPS, the system can locate you on the map and calculate exact distances to nearby storm cells.")
+        },
+        {
+            icon: <AlertCircle className="h-6 w-6 text-blue-500" />,
+            title: t("Reportes Ciudadanos", "Citizen Reports"),
+            description: t("¡Colaborá! Podes enviar reportes del estado del tiempo (granizo, lluvia, viento) en tu ubicación actual para alertar a otros usuarios.", "Collaborate! You can send weather reports (hail, rain, wind) from your current location to alert other users.")
+        },
+        {
+            icon: <Zap className="h-6 w-6 text-red-500" />,
+            title: t("Alertas de Proximidad", "Proximity Alerts"),
+            description: t("Si el sistema detecta una celda de tormenta severa a menos de 20km de vos, recibirás una notificación automática de alerta.", "If the system detects a severe storm cell within 20km, you'll receive an automatic alert notification.")
+        },
+        {
+            icon: <Bell className="h-6 w-6 text-red-500" />,
+            title: t("Notificaciones Generales", "General Notifications"),
+            description: t("Los administradores pueden enviar alertas manuales a toda la comunidad en caso de eventos climáticos extremos.", "Administrators can send manual alerts to the entire community during extreme weather events.")
+        },
+        {
+            icon: <BellRing className="h-6 w-6 text-green-500" />,
+            title: t("Gestión de Alertas", "Alert Management"),
+            description: t("Usa la campanita en la pantalla principal para activar o desactivar la recepción de notificaciones en tu dispositivo.", "Use the bell icon on the main screen to enable or disable notifications on your device.")
+        },
+        {
+            icon: <Layers className="h-6 w-6 text-sky-400" />,
+            title: t("Capas Satelitales", "Satellite Layers"),
+            description: t("Tocá el botón de capas en el mapa para superponer imágenes satelitales GOES-East en tiempo real: visible (VIS) o infrarrojo (IR).", "Tap the layers button on the map to overlay real-time GOES-East satellite images: visible (VIS) or infrared (IR).")
+        },
+        {
+            icon: (
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="#00ffff" stroke="rgba(0,0,0,0.4)" strokeWidth="0.5">
+                    <circle cx="12" cy="12" r="6" />
+                </svg>
+            ),
+            title: t("Aviones de Siembra", "Seeding Aircraft"),
+            description: t("Los círculos de colores sobre el mapa representan aviones de siembra de nubes rastreados en tiempo real por el sistema TITAN. Tocá uno para ver su matrícula, altitud y velocidad.", "Colored circles on the map represent cloud seeding aircraft tracked in real-time by TITAN. Tap one to see its tail number, altitude, and speed.")
+        }
+    ]
+
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="sm:max-w-md bg-black/90 border-white/10 text-white backdrop-blur-xl">
+                <DialogHeader>
+                    <DialogTitle className="text-xl font-bold flex items-center gap-2">
+                        <img src="/logo.png" alt="Hailcast Logo" className="w-6 h-6 object-contain" />
+                        {t("Bienvenido a HailCast", "Welcome to HailCast")}
+                    </DialogTitle>
+                    <DialogDescription className="text-zinc-400">
+                        {t("Guía rápida de funciones. Novedad: ahora podés elegir entre el radar Sur y el radar Norte.", "Quick feature guide. New: you can now switch between the South and North radars.")}
+                    </DialogDescription>
+                </DialogHeader>
+                <Tabs value={tab} onValueChange={setTab} className="w-full">
+                    <TabsList className="grid w-full grid-cols-3 bg-blue-200 mb-2">
+                        <TabsTrigger value="features" className="data-[state=active]:bg-gray-600 data-[state=active]:text-primary-foreground">
+                            <Info className="w-4 h-4 mr-2" />
+                            {t("Funciones", "Features")}
+                        </TabsTrigger>
+                        <TabsTrigger value="scale" className="data-[state=active]:bg-gray-600 data-[state=active]:text-primary-foreground">
+                            <Cloud className="w-4 h-4 mr-2" />
+                            {t("Radar", "Radar")}
+                        </TabsTrigger>
+                        <TabsTrigger value="contact" className="data-[state=active]:bg-gray-600 data-[state=active]:text-primary-foreground">
+                            <Mail className="w-4 h-4 mr-2" />
+                            {t("Contacto", "Contact")}
+                        </TabsTrigger>
+                    </TabsList>
+
+                    <TabsContent value="features" className="m-0 mt-2">
+                        <ScrollArea className="h-[55vh] pr-4">
+                            <div className="flex flex-col gap-6 py-2">
+                                {steps.map((step, index) => (
+                                    <div key={index} className="flex gap-4 items-start">
+                                        <div className="mt-1 bg-white/5 p-2 rounded-lg">
+                                            {step.icon}
+                                        </div>
+                                        <div className="space-y-1">
+                                            <h4 className="font-semibold text-sm text-zinc-100 leading-none">{step.title}</h4>
+                                            <p className="text-sm text-zinc-400 leading-snug">
+                                                {step.description}
+                                            </p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </ScrollArea>
+                    </TabsContent>
+
+                    <TabsContent value="scale" className="m-0 mt-2">
+                        <ScrollArea className="h-[55vh] pr-4">
+                            <div className="flex flex-col gap-4 py-2">
+                                <p className="text-sm text-zinc-400 mb-2">
+                                    {t("Esta escala indica la intensidad de la precipitación (en decibelios de reflectividad - dBZ) detectada por el radar meteorológico TITAN.", "This scale indicates the precipitation intensity (in reflectivity decibels - dBZ) detected by the TITAN weather radar.")}
+                                </p>
+                                <div className="space-y-3 bg-black/40 rounded-xl p-4 border border-white/5">
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex flex-col gap-1 w-6">
+                                            <div className="w-full h-2 rounded bg-[#007000] shadow-[0_0_5px_rgba(0,112,0,0.5)]" />
+                                            <div className="w-full h-2 rounded bg-[#087fdb] shadow-[0_0_5px_rgba(8,127,219,0.5)]" />
+                                            <div className="w-full h-2 rounded bg-[#1c47e8] shadow-[0_0_5px_rgba(28,71,232,0.5)]" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <p className="text-sm font-semibold text-zinc-200">{"< 36 dBZ"}</p>
+                                            <p className="text-xs text-zinc-400">{t("Lluvia débil", "Light rain")}</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex flex-col gap-1 w-6">
+                                            <div className="w-full h-3 rounded bg-[#6e0dc6] shadow-[0_0_5px_rgba(110,13,198,0.5)]" />
+                                            <div className="w-full h-3 rounded bg-[#c80f86] shadow-[0_0_5px_rgba(200,15,134,0.5)]" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <p className="text-sm font-semibold text-zinc-200">{"36 - 42 dBZ"}</p>
+                                            <p className="text-xs text-zinc-400">{t("Lluvia moderada", "Moderate rain")}</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex flex-col gap-0.5 w-6">
+                                            <div className="w-full h-2 rounded bg-[#c06487] shadow-[0_0_5px_rgba(192,100,135,0.5)]" />
+                                            <div className="w-full h-2 rounded bg-[#d2883b] shadow-[0_0_5px_rgba(210,136,59,0.5)]" />
+                                            <div className="w-full h-2 rounded bg-[#fac431] shadow-[0_0_5px_rgba(250,196,49,0.5)]" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <p className="text-sm font-semibold text-zinc-200">{"42 - 51 dBZ"}</p>
+                                            <p className="text-xs text-zinc-400">{t("Lluvia fuerte", "Heavy rain")}</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex flex-col gap-1 w-6">
+                                            <div className="w-full h-3 rounded bg-[#fefa03] shadow-[0_0_5px_rgba(254,250,3,0.5)]" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <p className="text-sm font-semibold text-zinc-200">{"51 - 54 dBZ"}</p>
+                                            <p className="text-xs text-zinc-400">{t("Lluvia torrencial y probable granizo", "Torrential rain, probable hail")}</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex flex-col gap-0.5 w-6">
+                                            <div className="w-full h-1.5 rounded bg-[#fe9a58] shadow-[0_0_5px_rgba(254,154,88,0.5)]" />
+                                            <div className="w-full h-1.5 rounded bg-[#fe5f05] shadow-[0_0_5px_rgba(254,95,5,0.5)]" />
+                                            <div className="w-full h-1.5 rounded bg-[#fd341c] shadow-[0_0_5px_rgba(253,52,28,0.5)]" />
+                                            <div className="w-full h-1.5 rounded bg-[#bebebe] shadow-[0_0_5px_rgba(190,190,190,0.5)]" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <p className="text-sm font-semibold text-zinc-200">{"> 55 dBZ"}</p>
+                                            <p className="text-xs text-zinc-400">{t("Lluvia torrencial y granizo seguro", "Torrential rain and definite hail")}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </ScrollArea>
+                    </TabsContent>
+                    
+                    <TabsContent value="contact" className="m-0 mt-2">
+                        <ScrollArea className="h-[55vh] pr-4">
+                            <div className="flex flex-col gap-6 py-4 px-2">
+                                <div className="text-center space-y-2 mb-4">
+                                    <h3 className="text-lg font-semibold text-white">{t("Desarrollado por", "Developed by")} Federico Caballero</h3>
+                                    <p className="text-zinc-400 text-sm">
+                                        {t("Proyecto Final de Grado - Universidad de Mendoza", "Final Degree Project - Universidad de Mendoza")}
+                                    </p>
+                                </div>
+                                
+                                <div className="flex flex-col gap-4">
+                                    <a href="/acerca" className="flex items-center gap-4 p-3 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 transition-colors border border-sky-500/30">
+                                        <Info className="h-6 w-6 text-sky-400" />
+                                        <div>
+                                            <p className="font-semibold text-sm text-zinc-100">{t("Acerca de HailCast", "About HailCast")}</p>
+                                            <p className="text-sm text-zinc-400 relative z-10">{t("Qué es, qué zona cubre y cómo funcionan las alertas", "What it is, coverage area and how alerts work")}</p>
+                                        </div>
+                                    </a>
+
+                                    <a href="mailto:federicorcaballero@gmail.com" className="flex items-center gap-4 p-3 rounded-lg bg-white/5 hover:bg-white/10 transition-colors border border-white/10">
+                                        <Mail className="h-6 w-6 text-sky-400" />
+                                        <div>
+                                            <p className="font-semibold text-sm text-zinc-100">Email</p>
+                                            <p className="text-sm text-zinc-400 relative z-10">federicorcaballero@gmail.com</p>
+                                        </div>
+                                    </a>
+                                    
+                                    <a href="https://linkedin.com/in/federico-caballero1" target="_blank" rel="noopener noreferrer" className="flex items-center gap-4 p-3 rounded-lg bg-white/5 hover:bg-white/10 transition-colors border border-white/10">
+                                        <Linkedin className="h-6 w-6 text-blue-500" />
+                                        <div>
+                                            <p className="font-semibold text-sm text-zinc-100">LinkedIn</p>
+                                            <p className="text-sm text-zinc-400 relative z-10">federico-caballero1</p>
+                                        </div>
+                                    </a>
+                                    
+                                    <a href="https://github.com/fede-caballero" target="_blank" rel="noopener noreferrer" className="flex items-center gap-4 p-3 rounded-lg bg-white/5 hover:bg-white/10 transition-colors border border-white/10">
+                                        <Github className="h-6 w-6 text-zinc-300" />
+                                        <div>
+                                            <p className="font-semibold text-sm text-zinc-100">GitHub</p>
+                                            <p className="text-sm text-zinc-400 relative z-10">fede-caballero</p>
+                                        </div>
+                                    </a>
+                                </div>
+                            </div>
+                        </ScrollArea>
+                    </TabsContent>
+                </Tabs>
+            </DialogContent>
+        </Dialog>
+    )
+}

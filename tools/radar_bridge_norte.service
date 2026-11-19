@@ -1,0 +1,30 @@
+[Unit]
+Description=Radar Bridge NORTE (HailCast): sube los MDV de TITAN San Martín al VPS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Usuario dueño de projDir en la VM del radar norte
+User=titan
+# Ajustar --folder a la carpeta AAAAMMDD/HHMMSS.mdv del radar norte.
+# --no-proxy: la VM tiene http_proxy/https_proxy mal configuradas y la salida directa funciona.
+ExecStart=/usr/bin/python3 /home/titan/projDir/scripts/radar_bridge.py \
+    --folder /home/titan/projDir/data/mdv/radar/cart_no_clutter \
+    --api https://vps-api.hail-cast-mendoza.com \
+    --radar norte \
+    --no-proxy
+
+Restart=always
+RestartSec=10s
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+# Misma clave que INGEST_SECRET_KEY en el .env del VPS
+Environment=INGEST_SECRET_KEY=PONER_LA_CLAVE_AQUI
+
+StandardOutput=append:/home/titan/projDir/logs/radar_bridge.log
+StandardError=append:/home/titan/projDir/logs/radar_bridge.log
+
+[Install]
+WantedBy=multi-user.target

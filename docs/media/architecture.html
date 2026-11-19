@@ -1,0 +1,54 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>body{margin:0;background:#fff;font-family:'IBM Plex Sans','Liberation Sans',sans-serif} #d{padding:24px;display:inline-block} .mermaid svg{width:1900px !important;height:auto !important;max-width:none !important}</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script></head>
+<body><div id="d"><pre class="mermaid">
+flowchart TB
+  subgraph SRC["Data sources"]
+    R1["San Rafael radar<br/>MDV volumes every ~3.5 min"]
+    R2["North radar<br/>MDV volumes"]
+    T["TITAN aircraft telemetry<br/>(spdb / ac_posn)"]
+  end
+  subgraph ING["Ingest"]
+    B["radar_bridge.py<br/>systemd service on the radar PC<br/>POST /api/upload_mdv"]
+    TS["telemetry_streamer.py"]
+  end
+  subgraph W["Inference worker (pipeline_worker.py)"]
+    direction LR
+    W1["1 · Poll MDV inbox"] --> W2["2 · LROSE Mdv2NetCDF"] --> W3["3 · ConvLSTM3D inference<br/>8 frames in → 7 frames out"] --> W4["4 · Cell detection<br/>connected components at 50/55/58 dBZ<br/>centroids → lat/lon"] --> W5["5 · Products<br/>georeferenced PNG · NetCDF<br/>hail swath GeoJSON"]
+  end
+  M[("Model weights (.pth)")] -.-> W3
+  DB[("SQLite, WAL mode<br/>predictions · users · comments<br/>push subscriptions · aircraft")]
+  subgraph API["Flask API"]
+    A1["/api/predictions · /images · /status"]
+    A2["Auth: JWT + Google OAuth, roles"]
+    A3["Alert engine: Web Push (VAPID) · Telegram"]
+    A4["Station proxy · story mode"]
+  end
+  subgraph FE["Frontend · Next.js + MapLibre GL"]
+    F1["Vector base map + image layers"]
+    F2["Timeline: 3 observed + 7 predicted frames"]
+    F3["Operational layers: aircraft · reports · stations · GOES"]
+    F4["Service worker: persistent web push"]
+  end
+  CF{{"Cloudflare<br/>DNS · CDN · TLS"}}
+  U(("Users<br/>public · operators · admins"))
+  EXT["External services<br/>Agrometeo stations · GOES-East WMS · Open-Meteo"]
+  R1 --> B
+  R2 --> B
+  T --> TS
+  B --> W1
+  TS --> DB
+  W5 --> DB
+  W5 --> A1
+  DB <--> API
+  W4 -. "severe cell" .-> A3
+  API --> CF --> FE
+  EXT --> FE
+  A3 -. "alerts" .-> F4
+  FE --> U
+
+</pre></div>
+<script>mermaid.initialize({startOnLoad:true,theme:'base',securityLevel:'loose',flowchart:{curve:'basis',htmlLabels:true,nodeSpacing:30,rankSpacing:60,useMaxWidth:false},
+themeVariables:{fontFamily:'IBM Plex Sans, Liberation Sans, sans-serif',fontSize:'15px',primaryColor:'#E4F0F5',primaryBorderColor:'#1F6F8B',primaryTextColor:'#16202A',lineColor:'#5E6E7C',clusterBkg:'#F6F8FA',clusterBorder:'#CBD4DC',tertiaryColor:'#FBEBD9'}});</script>
+</body></html>
