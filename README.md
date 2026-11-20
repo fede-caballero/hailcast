@@ -4,8 +4,7 @@
 
 [Live system](https://www.hail-cast-mendoza.com) · [Evaluation report](training/results/baseline/resumen.md) · [Training details](training/README.md) · [Deployment notes](deploy/README.md)
 
-<!-- TODO: docs/media/hailcast_demo.gif — 10 s, observed vs. predicted on the same map -->
-![HailCast forecast vs. observation](docs/media/hailcast_demo.gif)
+<!-- TODO: add docs/media/hailcast_demo.gif (10 s, observed vs. predicted on the same map) and reference it here -->
 
 HailCast takes the last radar scans of a storm and predicts the next seven, roughly 25 to 30 minutes ahead depending on radar cadence. It replaces the linear extrapolation used by operational systems (TITAN) with a ConvLSTM network that learns the non-linear dynamics of convection directly from a multi-year radar archive: cell growth, merging, intensification and decay.
 
@@ -45,6 +44,11 @@ Full table by lead time and storm type, plus bootstrap intervals: [`training/res
 **Where it loses, and why.** At the 55 dBZ severe-hail threshold, persistence wins at every lead time, and at the longest horizon the model almost never predicts pixels that intense. SSIM is slightly but consistently lower. Both come from the same cause: the model still smooths reflectivity peaks, while persistence copies the hail core intact and a severe core tends to sit in place for a few minutes. The hybrid loss reduced this but did not eliminate it. See [Limitations](#limitations).
 
 ## System architecture
+
+![HailCast system architecture](docs/media/architecture.png)
+
+<details>
+<summary>Diagram source (Mermaid)</summary>
 
 ```mermaid
 flowchart TB
@@ -93,6 +97,8 @@ flowchart TB
   FE --> U
 ```
 
+</details>
+
 - **Producer–consumer split.** A pipeline worker watches for new radar volumes, converts, runs inference and pre-renders georeferenced PNGs. A lightweight Flask API serves state and assets. SQLite in WAL mode synchronizes both.
 - **Resilient by design.** Pre-rendered assets behind a Cloudflare CDN decouple the public map from the inference host, so the system held real concurrent traffic during storm events.
 - **Two radar sites.** The pipeline ingests the northern Mendoza radar as well as San Rafael, each with its own geographic bounds and alert thresholds.
@@ -134,7 +140,7 @@ Requirements: Docker and Docker Compose. The image downloads LROSE from the [off
 
 ```bash
 cp backend/.env.example .env            # set SECRET_KEY, INGEST_SECRET_KEY, VAPID keys, etc.
-# place the trained weights (.pth) in ./model/   (see "Model weights" below)
+# place the trained weights in ./model/best_convlstm_model.pth   (see "Model weights" below)
 docker compose -f docker-compose.cpu.yml up --build
 ```
 
