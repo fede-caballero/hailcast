@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
-Prepara, fuera del contenedor, los datos de las secuencias de validación (CASES de evaluate_cases.py).
+Prepara, fuera del contenedor, los datos de las secuencias de validación (CASES de evaluate_cases.py
+o, con --cases, un manifiesto CSV / carpeta de casos por tipología).
 
+  ingest  : busca casos recursivamente en --casos-dir (<tipologia>/.../<YYYYMMDD>[-<HHMMSS>]/*.mdv o
+            .zip), verifica el criterio de selección (15 scans, 8+7, cadencia <= 6 min), copia los MDV
+            a stories_mdv/<story_id>/HHMMSS.mdv y escribe el manifiesto CSV (--manifest) con los casos
+            aceptados y los descartados con su motivo. Con --include-cases agrega también los CASES
+            fijos de evaluate_cases.py, verificados con el mismo criterio.
   convert : MDV (stories_mdv/<story>/HHMMSS.mdv) -> NetCDF con LROSE Mdv2NetCDF, con el mismo
             .params y el mismo nombre (<story><HHMMSS>.nc) que usa StoryManager._batch_convert_mdv_to_nc.
   predict : corre el modelo de producción sobre la ventana de 8 frames que termina en el último
@@ -28,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -43,7 +50,8 @@ REPO = HERE.parent
 sys.path.insert(0, str(REPO / "backend"))
 sys.path.insert(0, str(HERE))
 
-from evaluate_cases import CASES, HORIZONS  # noqa: E402
+from evaluate_cases import (CASES, HORIZONS, MANIFEST_COLS, N_INPUT, check_case,  # noqa: E402
+                            discover_cases, load_cases, write_manifest)
 
 LROSE_PARAMS = REPO / "backend" / "lrose_params" / "Mdv2NetCDF.params"
 DEFAULT_ROOT = REPO / "data" / "validation_cases"
@@ -251,6 +259,100 @@ def save_prediction_as_netcdf(output_subdir: str, pred_sequence_cleaned: np.ndar
 
 
 # =============================================================================
+# 0. ingest
+# =============================================================================
+def _story_scans(mdv_root, story):
+    return [f.stem for f in (Path(mdv_root) / story).glob("*.mdv")]
+
+
+def rows_from_cases(cases, mdv_root):
+    """Filas de manifiesto para un dict tipo -> [{story_id, pred_subdir}] ya presente en stories_mdv,
+    verificadas con check_case (mismo criterio que los casos descubiertos)."""
+    rows = []
+    for tipo, secuencias in cases.items():
+        for seq in secuencias:
+            story, cut = seq["story_id"], seq["pred_subdir"].split("-")[1]
+            chk = check_case(story, _story_scans(mdv_root, story), cut)
+            rows.append({"tipo": tipo, "story_id": story, "pred_subdir": seq["pred_subdir"], "nota": "",
+                         "window": {story + x for x in chk["inputs"] + chk["truth"]},
+                         "last_input_ts": seq["pred_subdir"].replace("-", ""),
+                         "estado": "ok" if chk["ok"] else "descartado",
+                         "motivo": chk["motivo"] or ("no existe stories_mdv/%s" % story if chk["n_scans"] == 0 else ""),
+                         "n_scans": chk["n_scans"], "cadencia_media_min": chk["cadencia_media_min"],
+                         "cadencia_max_min": chk["cadencia_max_min"], "origen": "CASES (evaluate_cases.py)"})
+    return rows
+
+
+def _copy_scan(src, dst: Path):
+    """Copia un MDV desde una carpeta o desde un miembro de un zip. Devuelve 'ok' | 'skip' | 'conflicto'."""
+    if dst.exists():
+        size = src.stat().st_size if isinstance(src, Path) else zipfile.ZipFile(src[0]).getinfo(src[1]).file_size
+        return "skip" if dst.stat().st_size == size else "conflicto"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(src, Path):
+        shutil.copy2(src, dst)
+    else:
+        with zipfile.ZipFile(src[0]) as z, z.open(src[1]) as fh, open(dst, "wb") as out:
+            shutil.copyfileobj(fh, out)
+    return "ok"
+
+
+def cmd_ingest(args):
+    rows = discover_cases(args.casos_dir) if args.casos_dir else []
+
+    def dedupe(rows):
+        # Duplicados (mismo pred_subdir): se queda el primero
+        seen = {}
+        for r in rows:
+            if r["estado"] == "ok":
+                if r["pred_subdir"] in seen:
+                    r["estado"], r["motivo"] = "descartado", f"duplicado de {seen[r['pred_subdir']]}"
+                else:
+                    seen[r["pred_subdir"]] = r["origen"]
+    dedupe(rows)
+    # Copia de MDV de los casos aceptados (solo la ventana de 15 scans)
+    copias = {}
+    for r in rows:
+        if r["estado"] != "ok" or not r.get("scans"):
+            continue
+        chk = check_case(r["story_id"], list(r["scans"]), r["pred_subdir"].split("-")[1])
+        for key in chk["inputs"] + chk["truth"]:
+            res = _copy_scan(r["scans"][key], Path(args.mdv_root) / r["story_id"] / f"{key[-6:]}.mdv")
+            copias[res] = copias.get(res, 0) + 1
+            if res == "conflicto":
+                logging.error("%s/%s.mdv ya existe con otro tamaño; se conserva el existente", r["story_id"], key[-6:])
+        r["n_scans_total_historia"] = len(_story_scans(args.mdv_root, r["story_id"]))
+    logging.info("MDV copiados: %s", copias or "ninguno")
+    if args.include_cases:
+        # Después de copiar: un caso fijo puede completarse con scans que llegaron en los casos nuevos
+        rows += rows_from_cases(CASES, args.mdv_root)
+        dedupe(rows)
+    # Aviso (no descarte): dos casos aceptados cuyas ventanas de 15 scans comparten scans
+    ok_rows = [r for r in rows if r["estado"] == "ok"]
+    for a in ok_rows:
+        for b in ok_rows:
+            if a is b or a["story_id"] != b["story_id"]:
+                continue
+            comunes = len(a.get("window", set()) & b.get("window", set()))
+            if comunes:
+                a["nota"] = (a.get("nota", "") + f"; comparte {comunes} scans con {b['pred_subdir']} ({b['tipo']})").strip("; ")
+
+    print(f"\n{'tipo':12s} {'caso':16s} {'scans':>5s} {'cad.med':>7s} {'cad.max':>7s}  origen        estado / motivo / nota")
+    for r in sorted(rows, key=lambda r: (r["tipo"], r["pred_subdir"] or r["story_id"])):
+        org = "/".join(Path(r["origen"]).parts[-2:]) if r["origen"].startswith("/") else "CASES"
+        print(f"{r['tipo']:12s} {(r['pred_subdir'] or r['story_id'] or '?'):16s} {r['n_scans']:5d} "
+              f"{r['cadencia_media_min']:7.2f} {r['cadencia_max_min']:7.2f}  {org:13s} {r['estado']} {r['motivo']} "
+              f"{('[' + r['nota'] + ']') if r.get('nota') else ''}")
+    ok = [r for r in rows if r["estado"] == "ok"]
+    por_tipo = {}
+    for r in ok:
+        por_tipo[r["tipo"]] = por_tipo.get(r["tipo"], 0) + 1
+    print(f"\nAceptados: {len(ok)} {por_tipo}; descartados: {len(rows) - len(ok)}")
+    write_manifest(rows, args.manifest)
+    logging.info("Manifiesto escrito en %s", args.manifest)
+
+
+# =============================================================================
 # 1. convert
 # =============================================================================
 def _find_mdv2netcdf():
@@ -284,14 +386,30 @@ def convert_one(exe, params, mdv_path: Path, nc_path: Path):
 
 def cmd_convert(args):
     exe = _find_mdv2netcdf()
-    stories = args.story or sorted({c["story_id"] for cs in CASES.values() for c in cs})
+    cases, _ = load_cases(args.cases)
+    all_cases = [c for cs in cases.values() for c in cs]
+    stories = args.story or sorted({c["story_id"] for c in all_cases})
     jobs = []
     for story in stories:
         mdv_dir = Path(args.mdv_root) / story
         if not mdv_dir.is_dir():
             logging.warning("No existe %s — omitida", mdv_dir)
             continue
+        if args.all_scans:
+            wanted = None
+        else:
+            # Solo la ventana de 15 scans (8 + 7) de cada caso de esa historia
+            wanted = set()
+            for c in all_cases:
+                if c["story_id"] == story:
+                    chk = check_case(story, _story_scans(args.mdv_root, story), c["pred_subdir"].split("-")[1])
+                    wanted.update(chk["inputs"] + chk["truth"])
+            if not wanted:
+                logging.warning("%s: ningún caso con ventana completa — nada que convertir (usar --all-scans)", story)
+                continue
         for mdv in sorted(mdv_dir.glob("*.mdv")):
+            if wanted is not None and mdv.stem not in wanted:
+                continue
             # MDV: HHMMSS.mdv -> NC: YYYYMMDDHHMMSS.nc (igual que StoryManager)
             jobs.append((mdv, Path(args.nc_root) / story / f"{story}{mdv.stem}.nc"))
     logging.info("Convirtiendo %d MDV con %d procesos en paralelo…", len(jobs), args.jobs)
@@ -316,7 +434,8 @@ def cmd_predict(args):
 
     torch.set_num_threads(args.threads)
     predictor = ModelPredictor(args.model)
-    for tipo, secuencias in CASES.items():
+    cases, _ = load_cases(args.cases)
+    for tipo, secuencias in cases.items():
         for seq in secuencias:
             story, sub = seq["story_id"], seq["pred_subdir"]
             last_ts = sub.replace("-", "")
@@ -359,8 +478,18 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
+    cases_help = "manifiesto CSV (de ingest) o carpeta de casos por tipología; default: CASES fijos"
+
+    i = sp.add_parser("ingest", help="descubrir casos en una carpeta por tipología, verificar criterio, copiar MDV, escribir manifiesto")
+    i.add_argument("--casos-dir", help="raíz con <tipologia>/.../<YYYYMMDD>[-<HHMMSS>]/*.mdv o .zip")
+    i.add_argument("--mdv-root", default=str(DEFAULT_ROOT / "stories_mdv"))
+    i.add_argument("--manifest", default=str(REPO / "training" / "results" / "baseline_ampliado" / "casos.csv"))
+    i.add_argument("--include-cases", action="store_true", help="agregar los CASES fijos de evaluate_cases.py")
+    i.set_defaults(fn=cmd_ingest)
 
     c = sp.add_parser("convert", help="MDV -> NetCDF con LROSE")
+    c.add_argument("--cases", help=cases_help)
+    c.add_argument("--all-scans", action="store_true", help="convertir toda la historia, no solo la ventana de 15")
     c.add_argument("--mdv-root", default=str(DEFAULT_ROOT / "stories_mdv"))
     c.add_argument("--nc-root", default=str(DEFAULT_ROOT / "stories_nc"))
     c.add_argument("--params", default=str(LROSE_PARAMS))
@@ -368,7 +497,8 @@ def main():
     c.add_argument("--jobs", type=int, default=4)
     c.set_defaults(fn=cmd_convert)
 
-    p = sp.add_parser("predict", help="re-inferencia del modelo sobre los casos de CASES")
+    p = sp.add_parser("predict", help="re-inferencia del modelo sobre los casos (CASES o --cases)")
+    p.add_argument("--cases", help=cases_help)
     p.add_argument("--nc-root", default=str(DEFAULT_ROOT / "stories_nc"))
     p.add_argument("--pred-root", default=str(DEFAULT_ROOT / "output_predictions"))
     p.add_argument("--model", default=str(DEFAULT_MODEL))

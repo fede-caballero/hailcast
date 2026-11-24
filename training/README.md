@@ -134,6 +134,20 @@ python training/baseline_persistencia.py --stories-nc data/validation_cases/stor
     --predictions data/validation_cases/output_predictions --out-dir training/results/baseline
 ```
 
+Validación ampliada (rama `eval/validacion-ampliada`): los casos se descubren en una carpeta clasificada
+por tipología en vez de editar `CASES`:
+
+```bash
+# Carpeta: <raíz>/<tipologia>/<YYYYMMDD>-<HHMMSS>/HHMMSS.mdv  (HHMMSS del nombre = último scan de entrada;
+# tipologías: multicelda, supercelda, adveccion, decaimiento, debil; también acepta .zip y subcarpetas)
+python training/prepare_validation_cases.py ingest --casos-dir <raíz> --include-cases   # verifica 8+7, cadencia <= 6 min
+python training/prepare_validation_cases.py convert --cases training/results/baseline_ampliado/casos.csv
+SECRET_KEY=... INGEST_SECRET_KEY=... python training/prepare_validation_cases.py predict --cases training/results/baseline_ampliado/casos.csv
+python training/baseline_persistencia.py --cases training/results/baseline_ampliado/casos.csv \
+    --stories-nc data/validation_cases/stories_nc --predictions data/validation_cases/output_predictions \
+    --out-dir training/results/baseline_ampliado
+```
+
 Resultados (13 secuencias: 4 multicelda, 4 supercelda, 5 advección; cadencia 3,45 min/scan) en
 [`results/baseline/`](results/baseline/): `resumen.md`, `baseline_vs_hailcast.csv`, `bootstrap_ic95.csv`,
 `csi35_por_horizonte.png`, `metricas_por_horizonte.png`, `csi35_por_tipologia.png`.

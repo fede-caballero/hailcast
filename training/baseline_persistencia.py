@@ -28,7 +28,13 @@ Salidas (en --out-dir):
   (*_en.png con --lang en: mismas figuras con textos en inglés)
   metricas_por_horizonte.png             MAE, SSIM, CSI35, CSI55 por horizonte, todas las secuencias
   csi35_por_tipologia.png                CSI >= 35 dBZ por horizonte, un panel por tipología
-  resumen.md                             tablas y frases listas para el post / README
+  csi35_tipologias_curvas.png            CSI >= 35 dBZ por horizonte, una curva por tipología (HailCast
+                                         sólido, persistencia a trazos, mismo color)
+  bootstrap_ic95_por_tipologia.csv       bootstrap de la diferencia HailCast - Persistencia por tipología
+  resumen.md                             criterio de selección, casos, descartados, tablas y bootstrap
+
+Casos: CASES fijo de evaluate_cases.py o --cases <manifiesto CSV de prepare_validation_cases.py ingest |
+carpeta de casos por tipología>. El manifiesto aporta además los casos descartados y su motivo.
 
 Uso:
   python baseline_persistencia.py --stories-nc data/validation_cases/stories_nc \
@@ -46,8 +52,8 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from evaluate_cases import (CASES, CSI_THRESHOLDS, HORIZONS, MIN_DBZ,  # noqa: E402
-                            compute_csi, compute_metrics, iter_cases, load_dbz)
+from evaluate_cases import (CASES, CSI_THRESHOLDS, DBZ_CELDA, HORIZONS, MIN_DBZ, N_INPUT,  # noqa: E402
+                            compute_csi, compute_metrics, iter_cases, load_cases, load_dbz)
 
 PHYSICAL_THRESHOLD_DBZ = 30.0   # = DATA_CONFIG['physical_threshold_dbz'] del worker
 MODEL_NAME = "HailCast"
@@ -58,6 +64,9 @@ PERS_RAW_NAME = "Persistencia_sin_umbral"
 COLORS = {MODEL_NAME: "#2a78d6", PERS_NAME: "#eb6834"}
 STYLES = {MODEL_NAME: dict(linestyle="-", marker="o"), PERS_NAME: dict(linestyle="--", marker="s")}
 TEXT, TEXT2, GRID = "#0b0b0b", "#52514e", "#e6e5e1"
+# Slots categóricos 1-5 de la guía (orden fijo, validado para visión normal y daltonismo)
+TIPO_COLORS = {"multicelda": "#2a78d6", "supercelda": "#eb6834", "adveccion": "#1baf7a",
+               "decaimiento": "#eda100", "debil": "#e87ba4"}
 
 # Textos de las figuras (--lang es|en). Los CSV y resumen.md quedan siempre en español.
 I18N = {
@@ -67,14 +76,18 @@ I18N = {
            "mae": "MAE (dBZ) — menor es mejor", "ssim": "SSIM — mayor es mejor",
            "csi35": "CSI ≥ 35 dBZ (pooled)", "csi55": "CSI ≥ 55 dBZ (pooled)",
            "suptitle": "HailCast vs persistencia — {n} secuencias de validación",
-           "tipos": {"multicelda": "multicelda", "supercelda": "supercelda", "adveccion": "advección"}},
+           "curvas_title": "CSI ≥ 35 dBZ por tipología — HailCast (sólido) vs persistencia (trazos)",
+           "tipos": {"multicelda": "multicelda", "supercelda": "supercelda", "adveccion": "advección",
+                     "decaimiento": "decaimiento", "debil": "débil"}},
     "en": {"xlabel": "lead time (minutes)", "pers": "Persistence",
            "csi35_y": "CSI (≥ 35 dBZ, pooled)",
            "csi35_title": "CSI ≥ 35 dBZ by lead time — {n} sequences, band = 95 % bootstrap CI",
            "mae": "MAE (dBZ) — lower is better", "ssim": "SSIM — higher is better",
            "csi35": "CSI ≥ 35 dBZ (pooled)", "csi55": "CSI ≥ 55 dBZ (pooled)",
            "suptitle": "HailCast vs persistence — {n} validation sequences",
-           "tipos": {"multicelda": "multicell", "supercelda": "supercell", "adveccion": "advection"}},
+           "curvas_title": "CSI ≥ 35 dBZ by storm type — HailCast (solid) vs persistence (dashed)",
+           "tipos": {"multicelda": "multicell", "supercelda": "supercell", "adveccion": "advection",
+                     "decaimiento": "decay", "debil": "weak"}},
 }
 T = I18N["es"]
 
@@ -89,20 +102,30 @@ def persistencia(last_frame, horizons=HORIZONS, umbral=PHYSICAL_THRESHOLD_DBZ):
     return np.repeat(f[None], horizons, axis=0)
 
 
-def load_cases(stories_nc, predictions):
+def load_data(stories_nc, predictions, cases=CASES):
     """Devuelve meta (DataFrame por secuencia) y arrays (N, 7, H, W) en dBZ: Y, P_model, P_pers, P_pers_raw."""
     meta, Y, P, PP, PPR = [], [], [], [], []
-    for case in iter_cases(stories_nc, predictions):
+    for case in iter_cases(stories_nc, predictions, cases=cases):
         y = np.stack([load_dbz(f) for f in case["truth_files"]])
         p = np.stack([load_dbz(f) for f in case["pred_files"]])
-        last = load_dbz(case["input_files"][-1])
+        inputs = [load_dbz(f) for f in case["input_files"][-N_INPUT:]]
+        last = inputs[-1]
         assert y.shape == p.shape == (HORIZONS,) + last.shape, (y.shape, p.shape, last.shape)
         ts = [case["input_files"][-1].stem] + [f.stem for f in case["truth_files"]]
         t = [datetime.strptime(s, "%Y%m%d%H%M%S") for s in ts]
         cadencia = float(np.mean(np.diff([x.timestamp() for x in t])) / 60.0)
+        # Diagnóstico (no entra en las métricas): píxeles >= DBZ_CELDA del último frame de entrada que NO
+        # superan ese umbral en los 8 frames (los que sí lo hacen son ecos fijos: cordillera, clutter).
+        X = np.stack(inputs)
+        fijos = np.all(X >= DBZ_CELDA, axis=0)
+        px_mov = int(((last >= DBZ_CELDA) & ~fijos).sum())
         meta.append({"tipo": case["tipo"], "story_id": case["story_id"], "pred_subdir": case["pred_subdir"],
                      "last_input_ts": case["last_input_ts"], "cadencia_min": round(cadencia, 2),
-                     "n_inputs_disponibles": len(case["input_files"])})
+                     "n_inputs_disponibles": len(case["input_files"]),
+                     "px_ge45_entrada": px_mov, "px_ecos_fijos_45": int(fijos.sum()),
+                     "max_dbz_verif": round(float(y.max()), 1),
+                     "observacion": ("" if px_mov > 0 or case["tipo"] == "debil"
+                                     else f"sin píxeles ≥ {DBZ_CELDA:.0f} dBZ (móviles) en la entrada: ¿debil?")})
         Y.append(y); P.append(p)
         PP.append(persistencia(last)); PPR.append(persistencia(last, umbral=None))
         print(f"  cargada {case['tipo']:10s} {case['story_id']}  último input {case['last_input_ts']}  "
@@ -134,7 +157,7 @@ def per_sequence_metrics(preds, Y, meta):
             for t in range(HORIZONS):
                 m = compute_metrics(P[i, t], Y[i, t])
                 rows.append({"modelo": name, "tipo": meta.tipo[i], "story_id": meta.story_id[i],
-                             "horizonte": t + 1, **m})
+                             "pred_subdir": meta.pred_subdir[i], "horizonte": t + 1, **m})
     return pd.DataFrame(rows)
 
 
@@ -150,9 +173,9 @@ def summary_table(per_seq, preds, Y, meta, cadencia):
         grupos[tipo] = np.where(meta.tipo.values == tipo)[0]
     rows = []
     for grupo, idx in grupos.items():
-        stories = set(meta.story_id.values[idx])
+        seqs = set(meta.pred_subdir.values[idx])
         for name, P in preds.items():
-            sub = per_seq[(per_seq.modelo == name) & per_seq.story_id.isin(stories)]
+            sub = per_seq[(per_seq.modelo == name) & per_seq.pred_subdir.isin(seqs)]
             g = sub.groupby("horizonte")
             for t in range(1, HORIZONS + 1):
                 row = {"grupo": grupo, "horizonte": t, "lead_min": round(t * cadencia, 1), "modelo": name,
@@ -177,9 +200,8 @@ def bootstrap(per_seq, preds, Y, meta, n_boot, seed):
     # Estadísticos por secuencia: (N, T) por métrica y modelo
     stats = {}
     for name, P in preds.items():
-        sub = per_seq[per_seq.modelo == name].sort_values(["story_id", "horizonte"])
-        order = {s: i for i, s in enumerate(meta.story_id)}
-        mat = lambda col: sub.pivot(index="story_id", columns="horizonte", values=col).reindex(meta.story_id).values
+        sub = per_seq[(per_seq.modelo == name) & per_seq.pred_subdir.isin(meta.pred_subdir)]
+        mat = lambda col: sub.pivot(index="pred_subdir", columns="horizonte", values=col).reindex(meta.pred_subdir).values
         stats[name] = {"MAE_dBZ": ("mean", mat("MAE_dBZ")), "SSIM": ("mean", mat("SSIM"))}
         for key, thr in CSI_THRESHOLDS.items():
             short = short_name(key)
@@ -210,6 +232,21 @@ def bootstrap(per_seq, preds, Y, meta, n_boot, seed):
             rows.append({"metrica": metric, "horizonte": t + 1, "modelo": f"{MODEL_NAME} - {PERS_NAME}",
                          "valor": v[t], "ic_lo": lo[t], "ic_hi": hi[t]})
     return pd.DataFrame(rows)
+
+
+def bootstrap_por_tipologia(per_seq, preds, Y, meta, n_boot, seed):
+    """bootstrap() restringido a cada tipología (>= 2 secuencias). Columna extra: grupo."""
+    out = []
+    for tipo in meta.tipo.unique():
+        idx = np.where(meta.tipo.values == tipo)[0]
+        if len(idx) < 2:
+            continue
+        sub_meta = meta.iloc[idx].reset_index(drop=True)
+        b = bootstrap(per_seq, {k: v[idx] for k, v in preds.items()}, Y[idx], sub_meta, n_boot, seed)
+        b.insert(0, "grupo", tipo)
+        b["n_secuencias"] = len(idx)
+        out.append(b)
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
 
 # ----------------------------------------------------------------------------- figuras
@@ -265,23 +302,77 @@ def fig_metricas(tabla, boot, x, n, out):
 
 def fig_tipologia(tabla, x, out):
     tipos = [g for g in tabla.grupo.unique() if g != "todas"]
-    fig, axes = plt.subplots(1, len(tipos), figsize=(3.3 * len(tipos), 3.4), dpi=200, sharey=True)
-    for ax, tipo in zip(np.atleast_1d(axes), tipos):
+    ncols = min(3, len(tipos)); nrows = int(np.ceil(len(tipos) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.3 * ncols, 3.4 * nrows), dpi=200, sharey=True, squeeze=False)
+    axes = axes.ravel()
+    for ax, tipo in zip(axes, tipos):
         sub = tabla[tabla.grupo == tipo]
         for name in (MODEL_NAME, PERS_NAME):
             s = sub[sub.modelo == name].sort_values("horizonte")
             _curve(ax, x, name, s.CSI35_pooled.values)
-        _style(ax, T["csi35_y"] if ax is np.atleast_1d(axes)[0] else None, (0, 1))
+        _style(ax, T["csi35_y"] if ax is axes[0] else None, (0, 1))
         ax.set_title(f"{T['tipos'].get(tipo, tipo)} (n={int(sub.n_secuencias.iloc[0])})", color=TEXT, fontsize=10, loc="left")
-    np.atleast_1d(axes)[0].legend(frameon=False, fontsize=9, labelcolor=TEXT2)
+    for ax in axes[len(tipos):]:
+        ax.set_visible(False)
+    axes[0].legend(frameon=False, fontsize=9, labelcolor=TEXT2)
+    fig.tight_layout(); fig.savefig(out); plt.close(fig)
+
+
+def fig_tipologias_curvas(tabla, x, out):
+    """Un solo eje: una curva por tipología (color fijo por tipología); HailCast sólido con marcador,
+    persistencia a trazos. Etiqueta directa al final de cada curva de HailCast."""
+    tipos = [g for g in tabla.grupo.unique() if g != "todas"]
+    fig, ax = plt.subplots(figsize=(7.2, 4.2), dpi=200)
+    ends = []
+    for tipo in tipos:
+        c = TIPO_COLORS.get(tipo, "#898781")
+        sub = tabla[tabla.grupo == tipo]
+        n = int(sub.n_secuencias.iloc[0])
+        label = f"{T['tipos'].get(tipo, tipo)} (n={n})"
+        hc = sub[sub.modelo == MODEL_NAME].sort_values("horizonte").CSI35_pooled.values
+        pe = sub[sub.modelo == PERS_NAME].sort_values("horizonte").CSI35_pooled.values
+        ax.plot(x, pe, color=c, linewidth=1.6, linestyle="--", alpha=0.85)
+        ax.plot(x, hc, color=c, linewidth=2, marker="o", markersize=5.5, markeredgecolor="white",
+                markeredgewidth=1.2, solid_capstyle="round", label=label)
+        ends.append([hc[-1], label, c])
+    # Etiquetas directas al final de cada curva de HailCast, separadas si se superponen
+    ends.sort(key=lambda e: e[0])
+    min_sep, y_prev = 0.045, -1.0
+    for e in ends:
+        e.append(max(e[0], y_prev + min_sep)); y_prev = e[-1]
+    for y_end, label, c, y_lab in ends:
+        ax.annotate(label, (x[-1], y_end), xytext=(x[-1] + 0.6, y_lab), textcoords="data",
+                    color=TEXT2, fontsize=8, va="center",
+                    arrowprops=dict(arrowstyle="-", color=c, lw=0.8, alpha=0.6) if abs(y_lab - y_end) > 1e-9 else None)
+    _style(ax, T["csi35_y"], (0, 1))
+    ax.set_xlim(x[0] - 1, x[-1] + 0.45 * (x[-1] - x[0]))
+    ax.set_title(T["curvas_title"], color=TEXT, fontsize=10, loc="left")
+    ax.legend(frameon=False, fontsize=8, labelcolor=TEXT2, loc="upper right")
     fig.tight_layout(); fig.savefig(out); plt.close(fig)
 
 
 # ----------------------------------------------------------------------------- resumen
-def write_resumen(tabla, boot, meta, cadencia, out_dir, n_boot):
+def _boot_lines(d, cadencia, metrics):
+    L = []
+    for metric in metrics:
+        for t in (1, 4, 7):
+            sel = d[(d.metrica == metric) & (d.horizonte == t)]
+            if sel.empty:
+                continue
+            r = sel.iloc[0]
+            signo = "+" if r.valor >= 0 else "−"
+            L.append(f"- {metric} a t+{t} ({t * cadencia:.1f} min): {signo}{abs(r.valor):.3f}, IC 95 % "
+                     f"[{r.ic_lo:+.3f}, {r.ic_hi:+.3f}]{'  ← no incluye el cero' if r.ic_lo * r.ic_hi > 0 else ''}")
+    return L
+
+
+def write_resumen(tabla, boot, meta, cadencia, out_dir, n_boot, boot_tipo=None, descartes=(), criterio=None):
     cols = ["MAE_dBZ", "SSIM", "CSI35_pooled", "CSI55_pooled", "CSI35_mean", "CSI55_mean"]
     L = [f"# HailCast vs persistencia — {len(meta)} secuencias de validación\n",
-         f"Generado {datetime.now():%Y-%m-%d %H:%M} por training/baseline_persistencia.py.\n",
+         f"Generado {datetime.now():%Y-%m-%d %H:%M} por training/baseline_persistencia.py.\n"]
+    if criterio:
+        L += [criterio.strip(), ""]
+    L += [
          "**Criterio del CSI:** pooled (se suman aciertos, falsas alarmas y fallos de todas las secuencias "
          "y se divide una vez), operador `>=`, umbrales 35 y 55 dBZ. Se incluye también el promedio por "
          "secuencia (`*_mean`, ignora indefinidos) para comparar con evaluate_cases.py.\n",
@@ -292,6 +383,18 @@ def write_resumen(tabla, boot, meta, cadencia, out_dir, n_boot):
          f"Cadencia media del radar en estas secuencias: {cadencia:.2f} min por scan "
          f"(t+1 … t+7 = {cadencia:.1f} … {7 * cadencia:.1f} min).\n",
          f"Secuencias por tipología: {meta.tipo.value_counts().to_dict()}.\n"]
+    L.append("\n## Casos usados\n")
+    L.append("`px_ge45_entrada`: píxeles ≥ 45 dBZ del último frame de entrada excluyendo los que superan 45 dBZ "
+             "en los 8 frames (`px_ecos_fijos_45`, ecos fijos). Es un diagnóstico de la regla de la tipología "
+             "`debil`; la clasificación la hace el analista en TITAN y no se modifica acá.\n")
+    L.append(meta[["tipo", "story_id", "pred_subdir", "last_input_ts", "cadencia_min", "px_ge45_entrada",
+                   "px_ecos_fijos_45", "max_dbz_verif", "observacion"]].to_markdown(index=False))
+    if len(descartes):
+        L.append("\n## Casos descartados\n")
+        dd = pd.DataFrame(list(descartes))
+        keep = [c for c in ["tipo", "story_id", "pred_subdir", "n_scans", "cadencia_max_min", "motivo", "origen"] if c in dd]
+        L.append(dd[keep].to_markdown(index=False))
+    L.append("")
     for grupo in tabla.grupo.unique():
         sub = tabla[(tabla.grupo == grupo) & tabla.modelo.isin([MODEL_NAME, PERS_NAME])]
         piv = sub.pivot(index="horizonte", columns="modelo", values=cols)
@@ -302,15 +405,14 @@ def write_resumen(tabla, boot, meta, cadencia, out_dir, n_boot):
         L.append("")
     L.append(f"\n## Bootstrap de la diferencia HailCast − Persistencia ({n_boot} remuestreos de secuencias, IC 95 %)\n")
     L.append("Si el intervalo no incluye el cero, la diferencia es consistente en la muestra.\n")
-    d = boot[boot.modelo == f"{MODEL_NAME} - {PERS_NAME}"]
-    for metric in ["CSI35_pooled", "CSI55_pooled", "MAE_dBZ", "SSIM"]:
-        for t in (1, 4, 7):
-            r = d[(d.metrica == metric) & (d.horizonte == t)].iloc[0]
-            signo = "+" if r.valor >= 0 else "−"
-            L.append(f"- {metric} a t+{t} ({t * cadencia:.1f} min): {signo}{abs(r.valor):.3f}, IC 95 % "
-                     f"[{r.ic_lo:+.3f}, {r.ic_hi:+.3f}]{'  ← no incluye el cero' if r.ic_lo * r.ic_hi > 0 else ''}")
-    L.append("\n## Secuencias usadas\n")
-    L.append(meta.to_markdown(index=False))
+    diff_name = f"{MODEL_NAME} - {PERS_NAME}"
+    L.append(f"\n### todas (n={len(meta)})\n")
+    L += _boot_lines(boot[boot.modelo == diff_name], cadencia, ["CSI35_pooled", "CSI55_pooled", "MAE_dBZ", "SSIM"])
+    if boot_tipo is not None and len(boot_tipo):
+        for tipo in boot_tipo.grupo.unique():
+            d = boot_tipo[(boot_tipo.grupo == tipo) & (boot_tipo.modelo == diff_name)]
+            L.append(f"\n### {tipo} (n={int(d.n_secuencias.iloc[0])})\n")
+            L += _boot_lines(d, cadencia, ["CSI35_pooled", "CSI55_pooled", "MAE_dBZ"])
     (Path(out_dir) / "resumen.md").write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
@@ -323,15 +425,22 @@ def main():
     ap.add_argument("--n-boot", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--lang", choices=list(I18N), default="es", help="idioma de las figuras (en agrega sufijo _en)")
+    ap.add_argument("--cases", help="manifiesto CSV (prepare_validation_cases.py ingest) o carpeta de casos; default: CASES")
+    ap.add_argument("--criterio", help="markdown con el criterio de selección a incluir en resumen.md "
+                                       "(default: <out-dir>/criterio_seleccion.md si existe)")
     args = ap.parse_args()
     global T
     T = I18N[args.lang]
     sfx = "" if args.lang == "es" else f"_{args.lang}"
     out = Path(args.out_dir); out.mkdir(parents=True, exist_ok=True)
 
+    cases, descartes = load_cases(args.cases)
+    criterio_path = Path(args.criterio) if args.criterio else out / "criterio_seleccion.md"
+    criterio = criterio_path.read_text(encoding="utf-8") if criterio_path.exists() else None
+
     print("Cargando secuencias…")
-    meta, Y, P, PP, PPR = load_cases(args.stories_nc, args.predictions)
-    faltan = [f"{c['story_id']} ({t})" for t, cs in CASES.items() for c in cs if c["story_id"] not in set(meta.story_id)]
+    meta, Y, P, PP, PPR = load_data(args.stories_nc, args.predictions, cases)
+    faltan = [f"{c['pred_subdir']} ({t})" for t, cs in cases.items() for c in cs if c["pred_subdir"] not in set(meta.pred_subdir)]
     if faltan:
         print(f"ATENCIÓN: {len(faltan)} casos de CASES omitidos: {', '.join(faltan)}")
     cadencia = float(meta.cadencia_min.mean())
@@ -347,12 +456,16 @@ def main():
     print(f"Bootstrap ({args.n_boot} remuestreos)…")
     boot = bootstrap(per_seq, {k: preds[k] for k in (MODEL_NAME, PERS_NAME)}, Y, meta, args.n_boot, args.seed)
     boot.to_csv(out / "bootstrap_ic95.csv", index=False)
+    boot_tipo = bootstrap_por_tipologia(per_seq, {k: preds[k] for k in (MODEL_NAME, PERS_NAME)}, Y, meta,
+                                        args.n_boot, args.seed)
+    boot_tipo.to_csv(out / "bootstrap_ic95_por_tipologia.csv", index=False)
 
     x = np.arange(1, HORIZONS + 1) * cadencia
     fig_csi35(boot, x, len(meta), out / f"csi35_por_horizonte{sfx}.png")
     fig_metricas(tabla, boot, x, len(meta), out / f"metricas_por_horizonte{sfx}.png")
     fig_tipologia(tabla, x, out / f"csi35_por_tipologia{sfx}.png")
-    write_resumen(tabla, boot, meta, cadencia, out, args.n_boot)
+    fig_tipologias_curvas(tabla, x, out / f"csi35_tipologias_curvas{sfx}.png")
+    write_resumen(tabla, boot, meta, cadencia, out, args.n_boot, boot_tipo, descartes, criterio)
 
     todas = tabla[(tabla.grupo == "todas") & tabla.modelo.isin([MODEL_NAME, PERS_NAME])]
     print("\n=== TODAS LAS SECUENCIAS (CSI pooled) ===")

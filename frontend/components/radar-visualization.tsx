@@ -4,7 +4,8 @@ import { useState, useEffect, useMemo, useRef, memo } from "react"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { useToast } from "@/components/ui/use-toast"
-import { Play, Pause, RotateCcw, Calendar, Clock, Trash2, MapPin, X, AlertTriangle, Pencil, Plane, Cloud, Layers, Share2, Zap, CloudRain, Heart, Thermometer, Sun, Mail, RadioTower } from "lucide-react"
+import { Play, Pause, RotateCcw, Calendar, Clock, Trash2, MapPin, X, AlertTriangle, Pencil, Plane, Cloud, Layers, Share2, Zap, CloudRain, Heart, Thermometer, Sun, Mail, RadioTower, Film, Camera } from "lucide-react"
+import { GIFEncoder, quantize, applyPalette } from "gifenc"
 import { ImageWithBounds, deleteReport, fetchAircraft, fetchHailSwathToday, fetchWeatherStations, fetchSolarParks, fetchLightning, LightningCollection, WeatherReport, Aircraft, StormCell, SolarPark, toggleReportLike, RadarInfo, RadarId, DEFAULT_RADAR } from "@/lib/api"
 import { Source, Layer, NavigationControl, ScaleControl, FullscreenControl, GeolocateControl, MapRef, Popup, Marker } from 'react-map-gl/maplibre'
 import 'maplibre-gl/dist/maplibre-gl.css'
@@ -58,6 +59,58 @@ function haversineDistance(coords1: { lat: number, lon: number }, coords2: { lat
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
+}
+
+// --- Compartir como GIF: captura del lienzo del mapa cuadro a cuadro ---------------------
+const GIF_WIDTH = 480;          // ancho del GIF (mantiene la proporción del mapa)
+const GIF_FRAME_DELAY_MS = 500; // por cuadro; el último dura el doble
+
+function waitForMapRender(map: any, timeoutMs = 2500): Promise<void> {
+  // Resuelve cuando el mapa terminó de cargar y dibujar (idle) o al vencer el tiempo
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    try { map.once('idle', finish); map.triggerRepaint(); } catch { finish(); }
+    setTimeout(finish, timeoutMs);
+  });
+}
+
+function captureMapFrame(map: any, label: string, sublabel: string): ImageData | null {
+  const src: HTMLCanvasElement = map.getCanvas();
+  if (!src.width || !src.height) return null;
+  const w = GIF_WIDTH;
+  const h = Math.round((src.height / src.width) * w);
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const g = canvas.getContext('2d');
+  if (!g) return null;
+  g.drawImage(src, 0, 0, w, h);
+  // Rótulo superior: tipo de cuadro + hora, y marca de agua abajo
+  g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(0, 0, w, 34);
+  g.font = 'bold 15px system-ui, sans-serif'; g.fillStyle = '#ffffff'; g.textBaseline = 'middle';
+  g.fillText(label, 10, 17);
+  g.font = '13px system-ui, sans-serif'; g.fillStyle = '#e5e7eb'; g.textAlign = 'right';
+  g.fillText(sublabel, w - 10, 17);
+  g.textAlign = 'left'; g.font = 'bold 12px system-ui, sans-serif'; g.fillStyle = 'rgba(255,255,255,0.85)';
+  g.fillText('hail-cast-mendoza.com', 10, h - 12);
+  return g.getImageData(0, 0, w, h);
+}
+
+function encodeGif(frames: ImageData[]): Blob {
+  const gif = GIFEncoder();
+  frames.forEach((frame, i) => {
+    const palette = quantize(frame.data, 256);
+    const index = applyPalette(frame.data, palette);
+    gif.writeFrame(index, frame.width, frame.height, {
+      palette,
+      delay: i === frames.length - 1 ? GIF_FRAME_DELAY_MS * 2 : GIF_FRAME_DELAY_MS,
+    });
+  });
+  gif.finish();
+  const bytes = gif.bytes();
+  // Copia a un ArrayBuffer propio: TS no acepta Uint8Array<ArrayBufferLike> como BlobPart
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  return new Blob([buffer], { type: 'image/gif' });
 }
 
 // Íconos de rayo para la capa GLM: cuatro colores por antigüedad, dibujados en un canvas y
@@ -115,6 +168,9 @@ export const RadarVisualization = memo(function RadarVisualization({
   const { t } = useLanguage()
   const { toast } = useToast()
   const [isPlaying, setIsPlaying] = useState(true)
+  // Compartir: menú (GIF o captura) y progreso de la captura del GIF
+  const [shareMenuOpen, setShareMenuOpen] = useState(false)
+  const [shareProgress, setShareProgress] = useState<{ done: number; total: number } | null>(null)
   const [currentFrameIndex, setCurrentFrameIndex] = useState(0)
   const [sliderDragValue, setSliderDragValue] = useState<number | null>(null) // visual position while dragging
   const [boundariesData, setBoundariesData] = useState<any>(null)
@@ -615,7 +671,42 @@ export const RadarVisualization = memo(function RadarVisualization({
   // cercana, el botón comparte el radar normal: así los ecos fijos de montaña no disparan alertas.
   const hasActiveStorm = !!nearestStorm;
 
-  const handleShare = async (mode: 'radar' | 'alert' = 'radar') => {
+  // Recorre los cuadros (observados + predicción), captura cada uno y arma el GIF
+  const buildShareGif = async (): Promise<File | null> => {
+    const map = mapRef.current?.getMap();
+    if (!map || frames.length === 0) return null;
+    const wasPlaying = isPlaying;
+    const prevIndex = currentFrameIndex;
+    setIsPlaying(false);
+    const captured: ImageData[] = [];
+    try {
+      for (let i = 0; i < frames.length; i++) {
+        setShareProgress({ done: i, total: frames.length });
+        setCurrentFrameIndex(i);
+        await new Promise((r) => setTimeout(r, 80));   // que React aplique el cambio de cuadro
+        await waitForMapRender(map);
+        const isPred = i >= inputFiles.length;
+        const label = isPred ? t('Predicción', 'Forecast') : t('Observación', 'Observed');
+        const img = captureMapFrame(map, label, frames[i]?.target_time || '');
+        if (img) captured.push(img);
+      }
+      if (!captured.length) return null;
+      setShareProgress({ done: frames.length, total: frames.length });
+      await new Promise((r) => setTimeout(r, 20));      // deja pintar el 100 % antes de codificar
+      const blob = encodeGif(captured);
+      return new File([blob], 'hailcast-radar.gif', { type: 'image/gif' });
+    } catch (err) {
+      console.warn('No se pudo armar el GIF:', err);
+      return null;
+    } finally {
+      setCurrentFrameIndex(prevIndex);
+      setIsPlaying(wasPlaying);
+      setShareProgress(null);
+    }
+  };
+
+  const handleShare = async (mode: 'radar' | 'alert' = 'radar', format: 'image' | 'gif' = 'image') => {
+    setShareMenuOpen(false);
     const timeLabel = getTimeLabel();
     const utm = mode === 'alert' ? '?utm_source=share&utm_medium=alert' : '?utm_source=share&utm_medium=radar';
     // Si se comparte desde un radar que no es el primario, el link abre ese mismo radar
@@ -634,11 +725,14 @@ export const RadarVisualization = memo(function RadarVisualization({
       );
     }
 
-    // Intentar capturar la imagen del mapa
+    // Imagen a adjuntar: GIF de todos los cuadros, o captura del cuadro actual
     let fileToShare: File | null = null;
+    if (format === 'gif') {
+      fileToShare = await buildShareGif();
+    }
     try {
       const map = mapRef.current?.getMap();
-      if (map) {
+      if (map && !fileToShare) {
         // Force a render to ensure WebGL buffer is ready and populated
         const blob = await new Promise<Blob | null>((resolve) => {
           map.once('render', () => {
@@ -835,18 +929,40 @@ export const RadarVisualization = memo(function RadarVisualization({
           </div>
         )}
 
-        {/* WhatsApp Share Button */}
-        <div className="absolute top-[345px] right-2 z-50">
+        {/* WhatsApp Share Button: abre un menú con dos formatos (GIF animado o captura) */}
+        <div className="absolute top-[345px] right-2 z-50 flex items-center gap-2">
+          {shareMenuOpen && !shareProgress && (
+            <div className="flex items-center gap-1.5 bg-black/85 border border-white/20 rounded-lg p-1 shadow-xl">
+              <button
+                onClick={(e) => { e.stopPropagation(); handleShare(hasActiveStorm ? 'alert' : 'radar', 'gif'); }}
+                disabled={frames.length === 0}
+                title={t('GIF con la animación completa (observado + predicción)', 'GIF with the full animation (observed + forecast)')}
+                className="flex items-center gap-1 px-2 h-7 rounded text-[11px] font-bold text-white bg-[#25D366] hover:bg-[#128C7E] disabled:opacity-40"
+              >
+                <Film className="h-3.5 w-3.5" /> GIF
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); handleShare(hasActiveStorm ? 'alert' : 'radar', 'image'); }}
+                title={t('Captura del cuadro actual', 'Snapshot of the current frame')}
+                className="flex items-center gap-1 px-2 h-7 rounded text-[11px] font-bold text-white bg-zinc-700 hover:bg-zinc-600"
+              >
+                <Camera className="h-3.5 w-3.5" /> {t('Captura', 'Snapshot')}
+              </button>
+            </div>
+          )}
           <button
-            onClick={(e) => { e.stopPropagation(); handleShare(hasActiveStorm ? 'alert' : 'radar'); }}
+            onClick={(e) => { e.stopPropagation(); if (!shareProgress) setShareMenuOpen((v) => !v); }}
+            disabled={!!shareProgress}
             title={hasActiveStorm
               ? t("Compartir alerta de tormenta por WhatsApp", "Share storm alert via WhatsApp")
               : t("Compartir radar por WhatsApp", "Share radar via WhatsApp")}
-            className={`flex items-center justify-center w-8 h-8 rounded shadow-lg border transition-all text-white ${hasActiveStorm
-              ? "bg-red-600 border-red-400 hover:bg-red-500 shadow-red-500/40 animate-pulse"
-              : "bg-[#25D366] border-[#128C7E] hover:bg-[#128C7E] shadow-[#25D366]/40"}`}
+            className={`flex items-center justify-center w-8 h-8 rounded shadow-lg border transition-all text-white ${shareProgress
+              ? "bg-zinc-800 border-zinc-600 text-[10px] font-bold"
+              : hasActiveStorm
+                ? "bg-red-600 border-red-400 hover:bg-red-500 shadow-red-500/40 animate-pulse"
+                : "bg-[#25D366] border-[#128C7E] hover:bg-[#128C7E] shadow-[#25D366]/40"}`}
           >
-            <Share2 className="h-4 w-4" />
+            {shareProgress ? `${Math.round((shareProgress.done / shareProgress.total) * 100)}%` : <Share2 className="h-4 w-4" />}
           </button>
         </div>
 

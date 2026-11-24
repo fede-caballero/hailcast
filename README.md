@@ -2,7 +2,7 @@
 
 **Deep learning nowcasting of severe convective storms from weather radar. Running in production for Mendoza, Argentina.**
 
-[Live system](https://www.hail-cast-mendoza.com) · [Evaluation report](training/results/baseline/resumen.md) · [Training details](training/README.md) · [Deployment notes](deploy/README.md)
+[Live system](https://www.hail-cast-mendoza.com) · [Evaluation report](training/results/baseline_ampliado/resumen.md) · [Training details](training/README.md) · [Deployment notes](deploy/README.md)
 
 <!-- TODO: add docs/media/hailcast_demo.gif (10 s, observed vs. predicted on the same map) and reference it here -->
 
@@ -27,21 +27,21 @@ Hail mitigation and public warnings rely on Lagrangian extrapolation (TITAN), wh
 
 ## Results
 
-Validated on **13 storm sequences from the 2025–2026 season**, with a model trained only on 2006–2014 data. The whole validation set is out of sample by more than a decade. Every metric is compared against **persistence** (the last observed frame repeated), the baseline any nowcasting system has to beat, with 95% bootstrap confidence intervals over 1,000 resamples of the sequences.
+Validated on **77 storm sequences from the 2025–2026 season** (21 multicell, 21 supercell, 20 advection-dominated, 15 weak convection), selected in TITAN under a [criterion fixed before running the pipeline](training/results/baseline_ampliado/criterio_seleccion.md), with a model trained only on 2006–2014 data. The whole validation set is out of sample by more than a decade. Every metric is compared against **persistence** (the last observed frame repeated), the baseline any nowcasting system has to beat, with 95% bootstrap confidence intervals over 1,000 resamples of the sequences.
 
 | Lead time | MAE (dBZ) HailCast / Persistence | CSI ≥ 35 dBZ HailCast / Persistence | CSI ≥ 55 dBZ HailCast / Persistence |
 |---:|:---:|:---:|:---:|
-| 3.4 min (t+1) | **1.15** / 1.22 | 0.50 / **0.52** | 0.23 / **0.32** |
-| 13.8 min (t+4) | **1.37** / 1.53 | **0.34** / 0.24 | 0.12 / **0.13** |
-| 24.1 min (t+7) | **1.61** / 1.75 | **0.17** / 0.14 | 0.00 / **0.13** |
+| 3.6 min (t+1) | **1.12** / 1.18 | 0.48 / **0.50** | 0.23 / **0.31** |
+| 14.3 min (t+4) | **1.30** / 1.45 | **0.31** / 0.23 | 0.09 / **0.17** |
+| 25.0 min (t+7) | **1.53** / 1.65 | 0.15 / 0.15 | 0.00 / **0.15** |
 
-Full table by lead time and storm type, plus bootstrap intervals: [`training/results/baseline/`](training/results/baseline/). CSI is pooled (hits, false alarms and misses summed over all sequences before dividing).
+Full tables by lead time and storm type, bootstrap intervals and the case list: [`training/results/baseline_ampliado/`](training/results/baseline_ampliado/). The original 13-sequence evaluation is kept unchanged in [`training/results/baseline/`](training/results/baseline/) and is reproduced exactly by the expanded run. CSI is pooled (hits, false alarms and misses summed over all sequences before dividing).
 
-![Metrics by lead time](training/results/baseline/metricas_por_horizonte_en.png)
+![Metrics by lead time](training/results/baseline_ampliado/metricas_por_horizonte_en.png)
 
-**Where HailCast wins.** Lower MAE at every lead time (95% CI excludes zero). Higher CSI at the 35 dBZ convection threshold between 7 and 20 minutes, with the largest gain at 14 minutes: +0.10, 95% CI [+0.05, +0.15]. The advantage is largest for moving storms, where persistence leaves the cell where it was and the model moves it. SSIM stays above 0.90 at every lead time and storm type.
+**Where HailCast wins.** Lower MAE at every lead time and in all three severe storm types (95% CI excludes zero). Higher CSI at the 35 dBZ convection threshold between 7 and 21 minutes, with the largest gain at 14 minutes: +0.08, 95% CI [+0.05, +0.10]. The gain holds in each severe type: multicell +0.11, supercell +0.08, advection +0.08. At the first and last lead times the two tie. SSIM stays above 0.89 at every lead time and storm type.
 
-**Where it loses, and why.** At the 55 dBZ severe-hail threshold, persistence wins at every lead time, and at the longest horizon the model almost never predicts pixels that intense. SSIM is slightly but consistently lower. Both come from the same cause: the model still smooths reflectivity peaks, while persistence copies the hail core intact and a severe core tends to sit in place for a few minutes. The hybrid loss reduced this but did not eliminate it. See [Limitations](#limitations).
+**Where it loses, and why.** At the 55 dBZ severe-hail threshold, persistence wins at every lead time (−0.08 at t+1, −0.15 at t+7, CI excludes zero), and at the longest horizon the model almost never predicts pixels that intense. In weak convection (15 cases with no sustained severe cell) persistence wins on every metric: the model's smoothing and its 30 dBZ post-processing threshold erase weak echoes that persistence simply keeps. SSIM is slightly but consistently lower. All of this comes from the same cause: the model still smooths reflectivity peaks and faint echoes, while persistence copies the field intact and a severe core tends to sit in place for several minutes. The hybrid loss reduced this but did not eliminate it. See [Limitations](#limitations).
 
 ## System architecture
 
@@ -111,8 +111,8 @@ flowchart TB
 |---|---|
 | Input / output | 8 radar frames in → 7 frames out (sequences of 15 scans: ~24–32 min of context, 25–30 min of forecast) |
 | Resolution | 250 × 250 composite reflectivity (2× downsampling from the native 500 × 500 grid), upsampled back for display and TITAN |
-| Architecture | 3 stacked ConvLSTM layers, 128 hidden channels, 3×3 kernels, residual connections, GroupNorm, Conv3D head with sigmoid output |
-| Loss | Huber + weighted penalty above ~41.5 dBZ + SSIM |
+| Architecture | 3 stacked ConvLSTM layers, 128 hidden channels, 3×3 kernels, LayerNorm after each layer, Conv3D head (1×3×3) with sigmoid output predicting the 7 frames at once |
+| Loss | Huber + weighted squared-error penalty inside observed pixels above 35 dBZ (weight 100 → 50 → 25 across phases) + (1 − SSIM) (weight 0.1 → 20 → 30) |
 | Curriculum | Phase 1 intensity and location → Phase 2 structure and advection → Phase 3 refinement |
 | Data | San Rafael S-band radar archive, 2006–2014: 2,600 sequences of 15 scans, balanced by storm morphology (advection, multicell, supercell), sliding-window augmentation |
 | Hardware | NVIDIA H200, ~12 h |
@@ -122,13 +122,14 @@ Details, hyperparameters and the full curriculum: [`training/README.md`](trainin
 ## Limitations
 
 - **Severe-hail cores at long lead times.** CSI at 55 dBZ is below persistence. The useful window for severe-hail location is the first 18–21 minutes. A warning product built on HailCast should say where convection is heading (where the model adds skill) and defer to the latest scan for the exact position of the most intense core.
-- **Small validation set.** 13 sequences. Confidence intervals are reported for that reason; an expanded validation with 30–40 sequences, including decaying and weak-convection cases, is in progress.
+- **Weak convection.** With no severe cell in the input, the model underperforms persistence on every metric. HailCast is a tool for convective situations; a product built on it should fall back to the latest scan when nothing severe is on the screen.
+- **Validation set.** 77 sequences from one season and one radar; storm types were labeled by an analyst in TITAN. Decaying-storm cases were not sampled separately.
 - **Single-level input.** The model uses composite reflectivity, not the full 3D volume. Vertical structure, which matters for hail, is not yet exploited.
 - **Baselines.** Compared against persistence only. Optical-flow extrapolation (e.g. pySTEPS) is the next baseline to add.
 
 ## Roadmap
 
-1. Expanded validation (30–40 sequences) and an optical-flow baseline.
+1. An optical-flow baseline (pySTEPS) and a decaying-storm subset in the validation.
 2. Residual diffusion correction on top of the ConvLSTM output to recover peak intensities (DiffCast / CorrDiff style), with event-triggered serverless GPU inference.
 3. Full 3D radar volumes and the 2015–2024 archive.
 4. GOES-East satellite channels as additional input.
