@@ -4,7 +4,9 @@
 
 [Live system](https://www.hail-cast-mendoza.com) · [Evaluation report](training/results/baseline_ampliado/resumen.md) · [Training details](training/README.md) · [Deployment notes](deploy/README.md)
 
-<!-- TODO: add docs/media/hailcast_demo.gif (10 s, observed vs. predicted on the same map) and reference it here -->
+![Observed radar vs. HailCast forecast, side by side](docs/media/hailcast_demo.gif)
+
+*Left: what the radar observed. Right: what HailCast had predicted from the previous 8 scans, 3 to 25 minutes earlier. Three storms from the 2025–2026 validation set; both panels show echoes ≥ 30 dBZ in the TITAN palette. Rendered with [`training/render_demo_video.py`](training/render_demo_video.py).*
 
 HailCast takes the last radar scans of a storm and predicts the next seven, roughly 25 to 30 minutes ahead depending on radar cadence. It replaces the linear extrapolation used by operational systems (TITAN) with a ConvLSTM network that learns the non-linear dynamics of convection directly from a multi-year radar archive: cell growth, merging, intensification and decay.
 
