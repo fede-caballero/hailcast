@@ -114,7 +114,7 @@ flowchart TB
 | Input / output | 8 radar frames in → 7 frames out (sequences of 15 scans: ~24–32 min of context, 25–30 min of forecast) |
 | Resolution | 250 × 250 composite reflectivity (2× downsampling from the native 500 × 500 grid), upsampled back for display and TITAN |
 | Architecture | 3 stacked ConvLSTM layers, 128 hidden channels, 3×3 kernels, LayerNorm after each layer, Conv3D head (1×3×3) with sigmoid output predicting the 7 frames at once |
-| Loss | Huber + weighted squared-error penalty inside observed pixels above 35 dBZ (weight 100 → 50 → 25 across phases) + (1 − SSIM) (weight 0.1 → 20 → 30) |
+| Loss | Huber + weighted squared-error penalty inside observed pixels above 18 dBZ (0.5 in the [−29, 65] dBZ normalised range) (weight 100 → 50 → 25 across phases) + (1 − SSIM) (weight 0.1 → 20 → 30) |
 | Curriculum | Phase 1 intensity and location → Phase 2 structure and advection → Phase 3 refinement |
 | Data | San Rafael S-band radar archive, 2006–2014: 2,600 sequences of 15 scans, balanced by storm morphology (advection, multicell, supercell), sliding-window augmentation |
 | Hardware | NVIDIA H200, ~12 h |
